@@ -1,0 +1,7 @@
+pandas          
+numpy           
+tkinter                 
+PyQt5         
+openpyxl        
+matplotlib       
+sqlite3
