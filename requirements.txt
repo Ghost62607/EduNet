@@ -5,3 +5,5 @@ PyQt5
 openpyxl        
 matplotlib       
 sqlite3
+streamlit
+plotly
