@@ -1,4 +1,14 @@
-pandas
+
 streamlit
+pandas
+numpy
 plotly
-pillow
+
+
+scipy
+openpyxl
+
+
+black
+flake8
+pytest
