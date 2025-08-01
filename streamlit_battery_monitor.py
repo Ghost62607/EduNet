@@ -5,80 +5,40 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import random
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import os
+import time
 
 # Page configuration
 st.set_page_config(
-    page_title="⚡ Battery Cell Monitoring System",
+    page_title="Battery Cell Data Logger",
     page_icon="🔋",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for futuristic styling
+# Minimal CSS for clean UI
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
-    
-    .main-header {
-        font-family: 'Orbitron', monospace;
-        font-size: 3rem;
-        font-weight: 900;
-        text-align: center;
-        background: linear-gradient(45deg, #00d4ff, #0099cc, #006bb3);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-shadow: 0 0 30px rgba(0, 212, 255, 0.5);
-        margin-bottom: 2rem;
-    }
-    
-    .metric-card {
-        background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 153, 204, 0.1));
-        border: 1px solid rgba(0, 212, 255, 0.3);
-        border-radius: 15px;
+    .metric-container {
+        background-color: #f0f2f6;
         padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #1f77b4;
         margin: 0.5rem 0;
-        box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1);
-        backdrop-filter: blur(10px);
     }
     
-    .status-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        display: inline-block;
-        margin-right: 8px;
-        animation: pulse 2s infinite;
-    }
+    .status-good { border-left-color: #2ca02c; }
+    .status-warning { border-left-color: #ff7f0e; }
+    .status-critical { border-left-color: #d62728; }
     
-    .status-healthy { background-color: #00ff88; }
-    .status-warning { background-color: #ffaa00; }
-    .status-critical { background-color: #ff4444; }
-    
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.5; }
-        100% { opacity: 1; }
-    }
-    
-    .task-badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        margin: 0.25rem;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: bold;
-        font-family: 'Orbitron', monospace;
-    }
-    
-    .task-cc-cv { background: linear-gradient(45deg, #4CAF50, #45a049); color: white; }
-    .task-idle { background: linear-gradient(45deg, #2196F3, #1976D2); color: white; }
-    .task-cc-cd { background: linear-gradient(45deg, #FF9800, #F57C00); color: white; }
-    
-    .stSelectbox > div > div {
-        background-color: rgba(0, 212, 255, 0.1);
-        border: 1px solid rgba(0, 212, 255, 0.3);
+    .data-info {
+        background-color: #e8f4f8;
+        padding: 0.5rem;
+        border-radius: 4px;
+        margin: 0.25rem 0;
+        font-size: 0.9rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -87,44 +47,58 @@ st.markdown("""
 def init_session_state():
     if 'cells_data' not in st.session_state:
         st.session_state.cells_data = {}
+    if 'historical_data' not in st.session_state:
+        st.session_state.historical_data = pd.DataFrame()
     if 'tasks' not in st.session_state:
         st.session_state.tasks = []
     if 'simulation_running' not in st.session_state:
         st.session_state.simulation_running = False
-    if 'update_counter' not in st.session_state:
-        st.session_state.update_counter = 0
+    if 'data_file_path' not in st.session_state:
+        st.session_state.data_file_path = "battery_data_log.csv"
+    if 'recording_enabled' not in st.session_state:
+        st.session_state.recording_enabled = False
+    if 'last_record_time' not in st.session_state:
+        st.session_state.last_record_time = None
 
 init_session_state()
 
 def get_cell_status(voltage, min_voltage, max_voltage):
     """Determine cell status based on voltage"""
-    if voltage < min_voltage * 1.1:
+    voltage_percent = (voltage - min_voltage) / (max_voltage - min_voltage) * 100
+    if voltage_percent < 20:
         return ("Critical", "status-critical")
-    elif voltage < min_voltage * 1.2:
+    elif voltage_percent < 50:
         return ("Warning", "status-warning")
     else:
-        return ("Healthy", "status-healthy")
+        return ("Good", "status-good")
 
 def create_cell_data(cell_type, cell_id):
     """Create cell data based on type"""
     base_configs = {
         "lfp": {"voltage": 3.2, "min_voltage": 2.8, "max_voltage": 3.6},
         "li-ion": {"voltage": 3.6, "min_voltage": 3.2, "max_voltage": 4.0},
-        "lipo": {"voltage": 3.7, "min_voltage": 3.0, "max_voltage": 4.2}
+        "lipo": {"voltage": 3.7, "min_voltage": 3.0, "max_voltage": 4.2},
+        "nicd": {"voltage": 1.2, "min_voltage": 1.0, "max_voltage": 1.4},
+        "nimh": {"voltage": 1.25, "min_voltage": 1.0, "max_voltage": 1.45}
     }
     
     config = base_configs.get(cell_type.lower(), base_configs["li-ion"])
     
     return {
         "type": cell_type,
-        "voltage": round(random.uniform(config["min_voltage"], config["max_voltage"]), 2),
-        "current": round(random.uniform(-5.0, 5.0), 2),
-        "temp": round(random.uniform(25, 45), 1),
+        "voltage": round(random.uniform(config["min_voltage"], config["max_voltage"]), 3),
+        "current": round(random.uniform(-5.0, 5.0), 3),
+        "temp": round(random.uniform(25, 45), 2),
         "min_voltage": config["min_voltage"],
         "max_voltage": config["max_voltage"],
-        "capacity": round(random.uniform(80, 100), 1),
+        "capacity": round(random.uniform(80, 100), 2),
         "cycle_count": random.randint(0, 1000),
-        "last_updated": datetime.now().strftime("%H:%M:%S")
+        "resistance": round(random.uniform(0.01, 0.1), 4),
+        "power": 0.0,
+        "energy": round(random.uniform(10, 50), 2),
+        "soc": round(random.uniform(20, 100), 1),  # State of Charge
+        "soh": round(random.uniform(80, 100), 1),  # State of Health
+        "timestamp": datetime.now()
     }
 
 def update_cell_data():
@@ -132,264 +106,546 @@ def update_cell_data():
     for cell_id in st.session_state.cells_data:
         cell = st.session_state.cells_data[cell_id]
         
-        # Simulate voltage fluctuation
-        voltage_change = random.uniform(-0.05, 0.05)
-        new_voltage = cell["voltage"] + voltage_change
-        cell["voltage"] = round(max(cell["min_voltage"], min(cell["max_voltage"], new_voltage)), 2)
+        # Simulate voltage fluctuation based on task
+        current_task = st.session_state.tasks[0] if st.session_state.tasks else "IDLE"
         
-        # Simulate current changes
-        cell["current"] = round(random.uniform(-5.0, 5.0), 2)
+        if current_task == "CC_CV":  # Charging
+            voltage_change = random.uniform(0.0, 0.02)
+        elif current_task == "CC_CD":  # Discharging
+            voltage_change = random.uniform(-0.02, 0.0)
+        else:  # IDLE
+            voltage_change = random.uniform(-0.01, 0.01)
+            
+        new_voltage = cell["voltage"] + voltage_change
+        cell["voltage"] = round(max(cell["min_voltage"], min(cell["max_voltage"], new_voltage)), 3)
+        
+        # Update current based on task
+        if current_task == "CC_CV":
+            cell["current"] = round(random.uniform(0.5, 3.0), 3)
+        elif current_task == "CC_CD":
+            cell["current"] = round(random.uniform(-3.0, -0.5), 3)
+        else:
+            cell["current"] = round(random.uniform(-0.5, 0.5), 3)
         
         # Simulate temperature changes
-        temp_change = random.uniform(-1, 1)
-        cell["temp"] = round(max(20, min(60, cell["temp"] + temp_change)), 1)
+        temp_change = random.uniform(-0.5, 0.5)
+        cell["temp"] = round(max(15, min(65, cell["temp"] + temp_change)), 2)
         
-        # Update capacity based on voltage
-        cell["capacity"] = round((cell["voltage"] / cell["max_voltage"]) * 100, 1)
+        # Calculate power
+        cell["power"] = round(cell["voltage"] * cell["current"], 3)
         
-        cell["last_updated"] = datetime.now().strftime("%H:%M:%S")
+        # Update capacity and SOC based on voltage
+        voltage_ratio = (cell["voltage"] - cell["min_voltage"]) / (cell["max_voltage"] - cell["min_voltage"])
+        cell["capacity"] = round(voltage_ratio * 100, 2)
+        cell["soc"] = round(max(0, min(100, voltage_ratio * 100)), 1)
+        
+        # Simulate resistance changes
+        cell["resistance"] = round(max(0.005, cell["resistance"] + random.uniform(-0.001, 0.001)), 4)
+        
+        # Update timestamp
+        cell["timestamp"] = datetime.now()
+
+def record_data_to_csv():
+    """Record current cell data to CSV file with timestamp"""
+    if not st.session_state.cells_data:
+        return False
     
-    st.session_state.update_counter += 1
+    # Prepare data for recording
+    records = []
+    current_time = datetime.now()
+    
+    for cell_id, cell_data in st.session_state.cells_data.items():
+        record = {
+            'timestamp': current_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
+            'cell_id': cell_id,
+            'cell_type': cell_data['type'],
+            'voltage': cell_data['voltage'],
+            'current': cell_data['current'],
+            'temperature': cell_data['temp'],
+            'capacity': cell_data['capacity'],
+            'power': cell_data['power'],
+            'resistance': cell_data['resistance'],
+            'soc': cell_data['soc'],
+            'soh': cell_data['soh'],
+            'energy': cell_data['energy'],
+            'cycle_count': cell_data['cycle_count'],
+            'task': st.session_state.tasks[0] if st.session_state.tasks else "IDLE"
+        }
+        records.append(record)
+    
+    # Convert to DataFrame
+    new_data = pd.DataFrame(records)
+    
+    # Append to existing CSV or create new one
+    try:
+        if os.path.exists(st.session_state.data_file_path):
+            # Append to existing file
+            new_data.to_csv(st.session_state.data_file_path, mode='a', header=False, index=False)
+        else:
+            # Create new file with headers
+            new_data.to_csv(st.session_state.data_file_path, index=False)
+        
+        # Update historical data in session state
+        if st.session_state.historical_data.empty:
+            st.session_state.historical_data = new_data
+        else:
+            st.session_state.historical_data = pd.concat([st.session_state.historical_data, new_data], 
+                                                        ignore_index=True)
+        
+        st.session_state.last_record_time = current_time
+        return True
+    except Exception as e:
+        st.error(f"Error recording data: {str(e)}")
+        return False
+
+def load_historical_data():
+    """Load historical data from CSV file"""
+    try:
+        if os.path.exists(st.session_state.data_file_path):
+            df = pd.read_csv(st.session_state.data_file_path)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            st.session_state.historical_data = df
+            return df
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
+        return pd.DataFrame()
 
 # Main header
-st.markdown('<h1 class="main-header">⚡ BATTERY CELL MONITORING SYSTEM</h1>', unsafe_allow_html=True)
+st.title("🔋 Battery Cell Data Logger & Monitoring System")
 
-# Sidebar for controls
+# Sidebar controls
 with st.sidebar:
-    st.markdown("### 🔧 System Controls")
+    st.header("⚙️ Configuration")
+    
+    # Data recording settings
+    st.subheader("📊 Data Recording")
+    
+    data_file = st.text_input("Data File Name", value=st.session_state.data_file_path)
+    if data_file != st.session_state.data_file_path:
+        st.session_state.data_file_path = data_file
+    
+    st.session_state.recording_enabled = st.checkbox("Enable Data Recording", 
+                                                     value=st.session_state.recording_enabled)
+    
+    recording_interval = st.selectbox("Recording Interval", 
+                                     ["1 second", "5 seconds", "10 seconds", "30 seconds", "1 minute"],
+                                     index=2)
+    
+    # Convert interval to seconds
+    interval_map = {"1 second": 1, "5 seconds": 5, "10 seconds": 10, 
+                   "30 seconds": 30, "1 minute": 60}
+    record_interval_sec = interval_map[recording_interval]
     
     # Cell configuration
-    st.markdown("#### Cell Configuration")
-    num_cells = st.number_input("Number of Cells", min_value=1, max_value=20, value=3)
+    st.subheader("🔧 Cell Setup")
+    num_cells = st.number_input("Number of Cells", min_value=1, max_value=50, value=3)
     
-    cell_types = ["LFP", "Li-Ion", "LiPo"]
+    cell_types = ["LFP", "Li-Ion", "LiPo", "NiCd", "NiMH"]
     
-    # Dynamic cell type selection
-    cell_configs = []
-    for i in range(num_cells):
-        cell_type = st.selectbox(f"Cell {i+1} Type", cell_types, key=f"cell_type_{i}")
-        cell_configs.append(cell_type)
+    # Batch cell configuration
+    batch_config = st.selectbox("Batch Configuration", 
+                               ["Individual", "All Same Type", "Mixed Pack"])
     
-    # Create cells
+    if batch_config == "All Same Type":
+        default_type = st.selectbox("Cell Type for All", cell_types)
+        cell_configs = [default_type] * num_cells
+    elif batch_config == "Mixed Pack":
+        # Predefined mixed configurations
+        if num_cells <= 3:
+            cell_configs = ["Li-Ion"] * num_cells
+        else:
+            cell_configs = (["Li-Ion"] * (num_cells//2) + 
+                          ["LFP"] * (num_cells - num_cells//2))
+    else:
+        # Individual configuration
+        cell_configs = []
+        for i in range(min(num_cells, 10)):  # Limit UI elements
+            cell_type = st.selectbox(f"Cell {i+1}", cell_types, key=f"cell_type_{i}")
+            cell_configs.append(cell_type)
+        
+        # Fill remaining cells with Li-Ion if more than 10
+        if num_cells > 10:
+            cell_configs.extend(["Li-Ion"] * (num_cells - 10))
+            st.info(f"Cells 11-{num_cells} set to Li-Ion (default)")
+    
+    # Initialize cells
     if st.button("🔄 Initialize Cells", type="primary"):
         st.session_state.cells_data = {}
-        for i, cell_type in enumerate(cell_configs):
-            cell_id = f"cell_{i+1}_{cell_type.lower()}"
+        for i in range(num_cells):
+            cell_type = cell_configs[i] if i < len(cell_configs) else "Li-Ion"
+            cell_id = f"cell_{i+1:02d}_{cell_type.lower()}"
             st.session_state.cells_data[cell_id] = create_cell_data(cell_type, cell_id)
         st.success(f"✅ {num_cells} cells initialized!")
     
     # Task configuration
-    st.markdown("#### Task Configuration")
-    task_options = ["CC_CV", "IDLE", "CC_CD"]
+    st.subheader("⚡ Task Management")
+    task_options = ["CC_CV", "IDLE", "CC_CD", "CCCV_CYCLE", "PULSE_TEST"]
     
-    num_tasks = st.number_input("Number of Tasks", min_value=0, max_value=10, value=0)
+    selected_task = st.selectbox("Current Task", task_options)
     
-    if num_tasks > 0:
-        tasks = []
-        for i in range(num_tasks):
-            task = st.selectbox(f"Task {i+1}", task_options, key=f"task_{i}")
-            tasks.append(task)
-        
-        if st.button("📋 Apply Tasks"):
-            st.session_state.tasks = tasks
-            st.success("Tasks applied successfully!")
+    if st.button("📋 Apply Task"):
+        st.session_state.tasks = [selected_task]
+        st.success(f"Task '{selected_task}' applied!")
+    
+    # Advanced task parameters
+    with st.expander("Advanced Task Settings"):
+        if selected_task == "CC_CV":
+            charge_current = st.slider("Charge Current (A)", 0.1, 10.0, 2.0)
+            cutoff_voltage = st.slider("Cutoff Voltage (V)", 3.0, 4.5, 4.2)
+        elif selected_task == "CC_CD":
+            discharge_current = st.slider("Discharge Current (A)", 0.1, 10.0, 2.0)
+            cutoff_voltage = st.slider("Cutoff Voltage (V)", 2.5, 3.5, 2.8)
     
     # Simulation controls
-    st.markdown("#### Simulation Controls")
+    st.subheader("🎮 Simulation")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("▶️ Start"):
+        if st.button("▶️ Start", use_container_width=True):
             st.session_state.simulation_running = True
-    
     with col2:
-        if st.button("⏸️ Stop"):
+        if st.button("⏸️ Stop", use_container_width=True):
             st.session_state.simulation_running = False
     
-    # Manual update button
-    if st.button("🔄 Update Data"):
+    # Manual actions
+    if st.button("🔄 Update Data", use_container_width=True):
         if st.session_state.cells_data:
             update_cell_data()
             st.success("Data updated!")
     
-    # Display simulation status
-    if st.session_state.simulation_running:
-        st.success("🟢 Simulation Running")
+    if st.button("💾 Record Now", use_container_width=True):
         if st.session_state.cells_data:
-            update_cell_data()  # Auto-update when simulation is running
-    else:
-        st.info("🔴 Simulation Stopped")
+            if record_data_to_csv():
+                st.success("Data recorded to CSV!")
+            else:
+                st.error("Failed to record data!")
+    
+    # Data management
+    st.subheader("📁 Data Management")
+    
+    if st.button("📂 Load Historical Data"):
+        df = load_historical_data()
+        if not df.empty:
+            st.success(f"Loaded {len(df)} records")
+        else:
+            st.info("No historical data found")
+    
+    if st.button("🗑️ Clear Session Data"):
+        st.session_state.cells_data = {}
+        st.session_state.historical_data = pd.DataFrame()
+        st.session_state.tasks = []
+        st.session_state.simulation_running = False
+        st.success("Session data cleared!")
 
-# Main dashboard
+# Main dashboard area
 if st.session_state.cells_data:
     
-    # Create metrics overview
-    col1, col2, col3, col4 = st.columns(4)
+    # Auto-update and record when simulation is running
+    if st.session_state.simulation_running:
+        update_cell_data()
+        
+        # Auto-record based on interval
+        if (st.session_state.recording_enabled and 
+            (st.session_state.last_record_time is None or 
+             (datetime.now() - st.session_state.last_record_time).total_seconds() >= record_interval_sec)):
+            record_data_to_csv()
+    
+    # System overview metrics
+    st.subheader("📊 System Overview")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     total_cells = len(st.session_state.cells_data)
     avg_voltage = np.mean([cell["voltage"] for cell in st.session_state.cells_data.values()])
+    avg_current = np.mean([cell["current"] for cell in st.session_state.cells_data.values()])
     avg_temp = np.mean([cell["temp"] for cell in st.session_state.cells_data.values()])
-    avg_capacity = np.mean([cell["capacity"] for cell in st.session_state.cells_data.values()])
+    total_power = sum([cell["power"] for cell in st.session_state.cells_data.values()])
     
     with col1:
         st.metric("🔋 Total Cells", total_cells)
     with col2:
-        st.metric("⚡ Avg Voltage", f"{avg_voltage:.2f}V")
+        st.metric("⚡ Avg Voltage", f"{avg_voltage:.3f}V")
     with col3:
-        st.metric("🌡️ Avg Temperature", f"{avg_temp:.1f}°C")
+        st.metric("🔄 Avg Current", f"{avg_current:.3f}A")
     with col4:
-        st.metric("📊 Avg Capacity", f"{avg_capacity:.1f}%")
+        st.metric("🌡️ Avg Temperature", f"{avg_temp:.1f}°C")
+    with col5:
+        st.metric("⚡ Total Power", f"{total_power:.2f}W")
     
-    # Display update counter
-    st.caption(f"🔄 Updates: {st.session_state.update_counter} | Last update: {datetime.now().strftime('%H:%M:%S')}")
+    # Status indicators
+    status_info = []
+    for cell_id, cell_data in st.session_state.cells_data.items():
+        status, status_class = get_cell_status(cell_data["voltage"], 
+                                             cell_data["min_voltage"], 
+                                             cell_data["max_voltage"])
+        status_info.append(status)
     
-    # Cell status cards
-    st.markdown("### 📱 Cell Status Overview")
+    status_counts = pd.Series(status_info).value_counts()
     
-    # Create columns based on number of cells
-    num_cols = min(3, len(st.session_state.cells_data))
-    cols = st.columns(num_cols)
-    
-    for idx, (cell_id, cell_data) in enumerate(st.session_state.cells_data.items()):
-        with cols[idx % num_cols]:
-            status, status_class = get_cell_status(
-                cell_data["voltage"], 
-                cell_data["min_voltage"], 
-                cell_data["max_voltage"]
-            )
-            
-            st.markdown(f"""
-            <div class="metric-card">
-                <h4>🔋 {cell_id.upper()}</h4>
-                <p><span class="status-indicator {status_class}"></span><strong>Status:</strong> {status}</p>
-                <p><strong>Type:</strong> {cell_data['type']}</p>
-                <p><strong>Voltage:</strong> {cell_data['voltage']:.2f}V</p>
-                <p><strong>Current:</strong> {cell_data['current']:.2f}A</p>
-                <p><strong>Temperature:</strong> {cell_data['temp']:.1f}°C</p>
-                <p><strong>Capacity:</strong> {cell_data['capacity']:.1f}%</p>
-                <p><strong>Cycles:</strong> {cell_data['cycle_count']}</p>
-                <p><strong>Updated:</strong> {cell_data['last_updated']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Real-time charts
-    st.markdown("### 📈 Real-time Monitoring")
-    
-    # Create subplots for different metrics
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Voltage Levels', 'Current Flow', 'Temperature', 'Capacity'),
-        specs=[[{"secondary_y": False}, {"secondary_y": False}],
-               [{"secondary_y": False}, {"secondary_y": False}]]
-    )
-    
-    # Extract data for plotting
-    cell_names = list(st.session_state.cells_data.keys())
-    voltages = [st.session_state.cells_data[cell]["voltage"] for cell in cell_names]
-    currents = [st.session_state.cells_data[cell]["current"] for cell in cell_names]
-    temperatures = [st.session_state.cells_data[cell]["temp"] for cell in cell_names]
-    capacities = [st.session_state.cells_data[cell]["capacity"] for cell in cell_names]
-    
-    # Add traces
-    fig.add_trace(go.Bar(x=cell_names, y=voltages, name="Voltage", marker_color='#00d4ff'), row=1, col=1)
-    fig.add_trace(go.Bar(x=cell_names, y=currents, name="Current", marker_color='#00ff88'), row=1, col=2)
-    fig.add_trace(go.Bar(x=cell_names, y=temperatures, name="Temperature", marker_color='#ffaa00'), row=2, col=1)
-    fig.add_trace(go.Bar(x=cell_names, y=capacities, name="Capacity", marker_color='#ff6b6b'), row=2, col=2)
-    
-    # Update layout
-    fig.update_layout(
-        height=600,
-        showlegend=False,
-        title_text="Cell Metrics Dashboard",
-        title_font=dict(family="Orbitron", size=20),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)'
-    )
-    
-    # Add y-axis labels
-    fig.update_yaxes(title_text="Voltage (V)", row=1, col=1)
-    fig.update_yaxes(title_text="Current (A)", row=1, col=2)
-    fig.update_yaxes(title_text="Temperature (°C)", row=2, col=1)
-    fig.update_yaxes(title_text="Capacity (%)", row=2, col=2)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Task status display
-    if st.session_state.tasks:
-        st.markdown("### 📋 Active Tasks")
-        task_html = ""
-        for i, task in enumerate(st.session_state.tasks):
-            task_class = f"task-{task.lower().replace('_', '-')}"
-            task_html += f'<span class="task-badge {task_class}">Task {i+1}: {task}</span>'
-        
-        st.markdown(task_html, unsafe_allow_html=True)
-    
-    # Data table
-    with st.expander("📊 Detailed Cell Data"):
-        df = pd.DataFrame.from_dict(st.session_state.cells_data, orient='index')
-        # Reorder columns for better display
-        column_order = ['type', 'voltage', 'current', 'temp', 'capacity', 'min_voltage', 'max_voltage', 'cycle_count', 'last_updated']
-        df = df[column_order]
-        st.dataframe(df, use_container_width=True)
-    
-    # Export functionality and controls
     col1, col2, col3 = st.columns(3)
-    
     with col1:
-        if st.button("💾 Export Data"):
-            df = pd.DataFrame.from_dict(st.session_state.cells_data, orient='index')
-            csv = df.to_csv(index=True)
-            st.download_button(
-                label="⬇️ Download CSV",
-                data=csv,
-                file_name=f"battery_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-    
+        st.metric("🟢 Good Cells", status_counts.get("Good", 0))
     with col2:
-        if st.button("📄 Export JSON"):
-            json_data = json.dumps(st.session_state.cells_data, indent=2, default=str)
-            st.download_button(
-                label="⬇️ Download JSON",
-                data=json_data,
-                file_name=f"battery_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
-    
+        st.metric("🟡 Warning Cells", status_counts.get("Warning", 0))
     with col3:
-        if st.button("🗑️ Clear All Data"):
-            st.session_state.cells_data = {}
-            st.session_state.tasks = []
-            st.session_state.simulation_running = False
-            st.session_state.update_counter = 0
-            st.success("All data cleared!")
-
-else:
-    # Welcome message
-    st.markdown("""
-    ### 🚀 Welcome to the Battery Cell Monitoring System
+        st.metric("🔴 Critical Cells", status_counts.get("Critical", 0))
     
-    This futuristic dashboard allows you to:
-    - 🔧 Configure multiple battery cells (LFP, Li-Ion, LiPo)
-    - 📊 Monitor real-time voltage, current, temperature, and capacity
-    - ⚡ Simulate different charging/discharging tasks
-    - 📈 Visualize data with interactive charts
-    - 💾 Export data for analysis (CSV & JSON)
+    # Recording status
+    if st.session_state.recording_enabled:
+        record_count = len(st.session_state.historical_data) if not st.session_state.historical_data.empty else 0
+        st.info(f"🔴 Recording enabled | {record_count} records | Interval: {recording_interval} | File: {st.session_state.data_file_path}")
+    else:
+        st.info("⚪ Recording disabled")
     
-    **Get started by configuring your cells in the sidebar!**
-    """)
+    # Current task display
+    if st.session_state.tasks:
+        st.info(f"⚡ Current Task: **{st.session_state.tasks[0]}**")
     
-    # System info
-    st.info("💡 **Tip:** Set up your cells first, then use the simulation controls to see live data updates!")
-
-# Auto-refresh for simulation
-if st.session_state.simulation_running:
-    # This will cause the app to refresh every few seconds when simulation is running
-    st.empty().write("")
-
-# Footer
-st.markdown("---")
-st.markdown(
-    '<div style="text-align: center; font-family: Orbitron; color: #00d4ff;">⚡ Powered by Advanced Battery Analytics ⚡</div>',
-    unsafe_allow_html=True
-)
+    # Detailed cell data table
+    st.subheader("📋 Cell Data Table")
+    
+    # Convert current data to DataFrame for display
+    display_data = []
+    for cell_id, cell_data in st.session_state.cells_data.items():
+        status, _ = get_cell_status(cell_data["voltage"], 
+                                  cell_data["min_voltage"], 
+                                  cell_data["max_voltage"])
+        
+        display_data.append({
+            'Cell ID': cell_id,
+            'Type': cell_data['type'],
+            'Status': status,
+            'Voltage (V)': cell_data['voltage'],
+            'Current (A)': cell_data['current'],
+            'Power (W)': cell_data['power'],
+            'Temperature (°C)': cell_data['temp'],
+            'SOC (%)': cell_data['soc'],
+            'SOH (%)': cell_data['soh'],
+            'Resistance (Ω)': cell_data['resistance'],
+            'Cycles': cell_data['cycle_count'],
+            'Energy (Wh)': cell_data['energy']
+        })
+    
+    current_df = pd.DataFrame(display_data)
+    
+    # Color code the status
+    def color_status(val):
+        if val == 'Good':
+            return 'background-color: #d4edda'
+        elif val == 'Warning':
+            return 'background-color: #fff3cd'
+        elif val == 'Critical':
+            return 'background-color: #f8d7da'
+        return ''
+    
+    styled_df = current_df.style.applymap(color_status, subset=['Status'])
+    st.dataframe(styled_df, use_container_width=True, height=300)
+    
+    # Multiple graph types
+    st.subheader("📈 Data Visualization")
+    
+    # Graph type selection
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        graph_tabs = st.tabs(["📊 Current Metrics", "📈 Time Series", "🔄 Comparison", "📉 Distribution", "🗺️ Correlation"])
+    with col2:
+        auto_refresh = st.checkbox("Auto Refresh Charts", value=st.session_state.simulation_running)
+    
+    # Tab 1: Current Metrics
+    with graph_tabs[0]:
+        metric_type = st.selectbox("Select Metric", 
+                                  ["Voltage", "Current", "Power", "Temperature", "SOC", "Resistance"])
+        
+        # Create different chart types for current data
+        chart_col1, chart_col2 = st.columns(2)
+        
+        with chart_col1:
+            # Bar chart
+            cell_names = list(st.session_state.cells_data.keys())
+            if metric_type == "Voltage":
+                values = [st.session_state.cells_data[cell]["voltage"] for cell in cell_names]
+                unit = "V"
+            elif metric_type == "Current":
+                values = [st.session_state.cells_data[cell]["current"] for cell in cell_names]
+                unit = "A"
+            elif metric_type == "Power":
+                values = [st.session_state.cells_data[cell]["power"] for cell in cell_names]
+                unit = "W"
+            elif metric_type == "Temperature":
+                values = [st.session_state.cells_data[cell]["temp"] for cell in cell_names]
+                unit = "°C"
+            elif metric_type == "SOC":
+                values = [st.session_state.cells_data[cell]["soc"] for cell in cell_names]
+                unit = "%"
+            else:  # Resistance
+                values = [st.session_state.cells_data[cell]["resistance"] for cell in cell_names]
+                unit = "Ω"
+            
+            fig_bar = px.bar(x=cell_names, y=values, 
+                           title=f"{metric_type} by Cell (Bar Chart)",
+                           labels={'x': 'Cell ID', 'y': f'{metric_type} ({unit})'})
+            fig_bar.update_layout(height=400)
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        with chart_col2:
+            # Pie chart for status distribution
+            fig_pie = px.pie(values=list(status_counts.values), 
+                           names=list(status_counts.index),
+                           title="Cell Status Distribution")
+            fig_pie.update_layout(height=400)
+            st.plotly_chart(fig_pie, use_container_width=True)
+    
+    # Tab 2: Time Series
+    with graph_tabs[1]:
+        if not st.session_state.historical_data.empty:
+            ts_metric = st.selectbox("Time Series Metric", 
+                                   ["voltage", "current", "power", "temperature", "soc"],
+                                   key="ts_metric")
+            
+            # Multi-line time series
+            fig_ts = px.line(st.session_state.historical_data, 
+                           x='timestamp', y=ts_metric, color='cell_id',
+                           title=f"{ts_metric.title()} Over Time")
+            fig_ts.update_layout(height=500)
+            st.plotly_chart(fig_ts, use_container_width=True)
+            
+            # Show data statistics
+            st.write("**Time Series Statistics:**")
+            ts_stats = st.session_state.historical_data.groupby('cell_id')[ts_metric].agg(['mean', 'min', 'max', 'std'])
+            st.dataframe(ts_stats)
+        else:
+            st.info("No historical data available. Enable recording and run simulation to collect time series data.")
+    
+    # Tab 3: Comparison
+    with graph_tabs[2]:
+        comp_col1, comp_col2 = st.columns(2)
+        
+        with comp_col1:
+            # Radar chart comparison
+            if len(st.session_state.cells_data) >= 2:
+                selected_cells = st.multiselect("Select Cells to Compare", 
+                                               list(st.session_state.cells_data.keys()),
+                                               default=list(st.session_state.cells_data.keys())[:3])
+                
+                if selected_cells:
+                    fig_radar = go.Figure()
+                    
+                    for cell_id in selected_cells:
+                        cell = st.session_state.cells_data[cell_id]
+                        # Normalize values for radar chart
+                        normalized_values = [
+                            (cell["voltage"] - cell["min_voltage"]) / (cell["max_voltage"] - cell["min_voltage"]) * 100,
+                            cell["soc"],
+                            cell["soh"],
+                            min(100, cell["temp"] / 60 * 100),  # Normalize temp to 0-100
+                            min(100, abs(cell["current"]) / 5 * 100)  # Normalize current to 0-100
+                        ]
+                        
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=normalized_values,
+                            theta=['Voltage %', 'SOC %', 'SOH %', 'Temp %', 'Current %'],
+                            fill='toself',
+                            name=cell_id
+                        ))
+                    
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                        title="Cell Comparison (Normalized %)",
+                        height=500
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+        
+        with comp_col2:
+            # Box plot for metric distribution
+            box_metric = st.selectbox("Box Plot Metric", 
+                                    ["voltage", "current", "temperature", "soc"],
+                                    key="box_metric")
+            
+            box_data = []
+            for cell_id, cell_data in st.session_state.cells_data.items():
+                if box_metric == "voltage":
+                    box_data.append(cell_data["voltage"])
+                elif box_metric == "current":
+                    box_data.append(cell_data["current"])
+                elif box_metric == "temperature":
+                    box_data.append(cell_data["temp"])
+                else:  # soc
+                    box_data.append(cell_data["soc"])
+            
+            fig_box = go.Figure()
+            fig_box.add_trace(go.Box(y=box_data, name=box_metric.title()))
+            fig_box.update_layout(title=f"{box_metric.title()} Distribution", height=400)
+            st.plotly_chart(fig_box, use_container_width=True)
+    
+    # Tab 4: Distribution
+    with graph_tabs[3]:
+        hist_col1, hist_col2 = st.columns(2)
+        
+        with hist_col1:
+            # Histogram
+            hist_metric = st.selectbox("Histogram Metric", 
+                                     ["voltage", "current", "temperature", "power"],
+                                     key="hist_metric")
+            
+            hist_data = []
+            for cell_data in st.session_state.cells_data.values():
+                if hist_metric == "voltage":
+                    hist_data.append(cell_data["voltage"])
+                elif hist_metric == "current":
+                    hist_data.append(cell_data["current"])
+                elif hist_metric == "temperature":
+                    hist_data.append(cell_data["temp"])
+                else:  # power
+                    hist_data.append(cell_data["power"])
+            
+            fig_hist = px.histogram(x=hist_data, nbins=10, 
+                                  title=f"{hist_metric.title()} Distribution")
+            fig_hist.update_layout(height=400)
+            st.plotly_chart(fig_hist, use_container_width=True)
+        
+        with hist_col2:
+            # Scatter plot
+            if len(st.session_state.cells_data) > 1:
+                scatter_x = st.selectbox("X-axis", ["voltage", "current", "temperature"],
+                                       key="scatter_x")
+                scatter_y = st.selectbox("Y-axis", ["power", "soc", "resistance"],
+                                       key="scatter_y")
+                
+                x_data = [cell[scatter_x if scatter_x != "temperature" else "temp"] 
+                         for cell in st.session_state.cells_data.values()]
+                y_data = [cell[scatter_y] for cell in st.session_state.cells_data.values()]
+                
+                fig_scatter = px.scatter(x=x_data, y=y_data,
+                                       title=f"{scatter_y.title()} vs {scatter_x.title()}")
+                fig_scatter.update_layout(height=400)
+                st.plotly_chart(fig_scatter, use_container_width=True)
+    
+    # Tab 5: Correlation
+    with graph_tabs[4]:
+        if len(st.session_state.cells_data) > 2:
+            # Create correlation matrix
+            corr_data = []
+            for cell_data in st.session_state.cells_data.values():
+                corr_data.append([
+                    cell_data["voltage"],
+                    cell_data["current"],
+                    cell_data["temp"],
+                    cell_data["power"],
+                    cell_data["soc"],
+                    cell_data["resistance"]
+                ])
+            
+            corr_df = pd.DataFrame(corr_data, 
+                                 columns=["Voltage", "Current", "Temperature", 
+                                         "Power", "SOC", "Resistance"])
+            corr_matrix = corr_df.corr()
+            
+            fig_corr = px.imshow(corr_matrix, 
+                               title="Parameter Correlation Matrix",
+                               color_continuous_scale="RdBu")
+            fig_corr.update_layout(height=500)
+            st.plotly_chart(fig_corr, use_container_width=True)
+        else:
+            st.info("Need more cells for meaningful correlation analysis")
