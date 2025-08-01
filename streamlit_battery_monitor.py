@@ -169,7 +169,7 @@ def record_data_to_csv():
             'soh': cell_data['soh'],
             'energy': cell_data['energy'],
             'cycle_count': cell_data['cycle_count'],
-            'task': st.session_state.tasks[0] if st.session_state.tasks else "IDLE"
+            'task': st.session_state.task_assignments.get(cell_id, "IDLE")  # Individual task
         }
         records.append(record)
     
@@ -281,22 +281,141 @@ with st.sidebar:
     
     # Task configuration
     st.subheader("⚡ Task Management")
-    task_options = ["CC_CV", "IDLE", "CC_CD", "CCCV_CYCLE", "PULSE_TEST"]
+    task_options = ["CC_CV", "IDLE", "CC_CD", "CCCV_CYCLE", "PULSE_TEST", "IMPEDANCE_TEST", "SELF_DISCHARGE"]
     
-    selected_task = st.selectbox("Current Task", task_options)
+    # Task assignment mode
+    task_mode = st.radio("Task Assignment Mode", 
+                        ["Single Task (All Cells)", "Individual Tasks", "Group Tasks"],
+                        horizontal=True)
     
-    if st.button("📋 Apply Task"):
-        st.session_state.tasks = [selected_task]
-        st.success(f"Task '{selected_task}' applied!")
+    # Initialize task assignments if not exists
+    if 'task_assignments' not in st.session_state:
+        st.session_state.task_assignments = {}
+    
+    if task_mode == "Single Task (All Cells)":
+        # Single task for all cells
+        selected_task = st.selectbox("Task for All Cells", task_options)
+        
+        if st.button("📋 Apply to All Cells"):
+            for cell_id in st.session_state.cells_data.keys():
+                st.session_state.task_assignments[cell_id] = selected_task
+            st.session_state.tasks = [selected_task]  # Keep for backward compatibility
+            st.success(f"Task '{selected_task}' applied to all cells!")
+    
+    elif task_mode == "Individual Tasks":
+        # Individual task for each cell
+        st.write("**Assign tasks to individual cells:**")
+        
+        if st.session_state.cells_data:
+            individual_tasks = {}
+            
+            # Create columns for better layout
+            cells_list = list(st.session_state.cells_data.keys())
+            num_cols = min(2, len(cells_list))
+            cols = st.columns(num_cols)
+            
+            for idx, cell_id in enumerate(cells_list):
+                with cols[idx % num_cols]:
+                    current_task = st.session_state.task_assignments.get(cell_id, "IDLE")
+                    task = st.selectbox(f"{cell_id}", task_options, 
+                                      index=task_options.index(current_task) if current_task in task_options else 1,
+                                      key=f"individual_task_{cell_id}")
+                    individual_tasks[cell_id] = task
+            
+            if st.button("📋 Apply Individual Tasks"):
+                st.session_state.task_assignments = individual_tasks
+                st.session_state.tasks = list(set(individual_tasks.values()))  # Unique tasks
+                st.success("Individual tasks applied!")
+        else:
+            st.info("Initialize cells first to assign individual tasks")
+    
+    else:  # Group Tasks
+        # Group-based task assignment
+        st.write("**Create task groups:**")
+        
+        if st.session_state.cells_data:
+            # Group creation interface
+            num_groups = st.number_input("Number of Task Groups", min_value=1, max_value=5, value=2)
+            
+            group_assignments = {}
+            cells_list = list(st.session_state.cells_data.keys())
+            
+            for group_num in range(num_groups):
+                st.write(f"**Group {group_num + 1}:**")
+                group_col1, group_col2 = st.columns([2, 1])
+                
+                with group_col1:
+                    # Multi-select for cells in this group
+                    available_cells = [cell for cell in cells_list if cell not in group_assignments]
+                    selected_cells = st.multiselect(
+                        f"Select cells for Group {group_num + 1}",
+                        available_cells,
+                        key=f"group_{group_num}_cells"
+                    )
+                
+                with group_col2:
+                    # Task for this group
+                    group_task = st.selectbox(
+                        f"Task for Group {group_num + 1}",
+                        task_options,
+                        key=f"group_{group_num}_task"
+                    )
+                
+                # Assign cells to this group
+                for cell in selected_cells:
+                    group_assignments[cell] = group_task
+            
+            # Show unassigned cells
+            unassigned_cells = [cell for cell in cells_list if cell not in group_assignments]
+            if unassigned_cells:
+                st.warning(f"Unassigned cells: {', '.join(unassigned_cells)}")
+                default_task = st.selectbox("Default task for unassigned cells", task_options, index=1)
+                for cell in unassigned_cells:
+                    group_assignments[cell] = default_task
+            
+            if st.button("📋 Apply Group Tasks"):
+                st.session_state.task_assignments = group_assignments
+                st.session_state.tasks = list(set(group_assignments.values()))  # Unique tasks
+                st.success("Group tasks applied!")
+        else:
+            st.info("Initialize cells first to create task groups")
+    
+    # Display current task assignments
+    if st.session_state.task_assignments:
+        with st.expander("📋 Current Task Assignments"):
+            task_summary = {}
+            for cell_id, task in st.session_state.task_assignments.items():
+                if task not in task_summary:
+                    task_summary[task] = []
+                task_summary[task].append(cell_id)
+            
+            for task, cells in task_summary.items():
+                st.write(f"**{task}:** {', '.join(cells)}")
     
     # Advanced task parameters
-    with st.expander("Advanced Task Settings"):
-        if selected_task == "CC_CV":
-            charge_current = st.slider("Charge Current (A)", 0.1, 10.0, 2.0)
-            cutoff_voltage = st.slider("Cutoff Voltage (V)", 3.0, 4.5, 4.2)
-        elif selected_task == "CC_CD":
-            discharge_current = st.slider("Discharge Current (A)", 0.1, 10.0, 2.0)
-            cutoff_voltage = st.slider("Cutoff Voltage (V)", 2.5, 3.5, 2.8)
+    with st.expander("⚙️ Advanced Task Parameters"):
+        # Global parameters that apply to all relevant tasks
+        st.write("**Charging Parameters:**")
+        charge_current = st.slider("Charge Current (A)", 0.1, 10.0, 2.0, key="global_charge_current")
+        charge_voltage = st.slider("Charge Cutoff Voltage (V)", 3.0, 4.5, 4.2, key="global_charge_voltage")
+        
+        st.write("**Discharging Parameters:**")
+        discharge_current = st.slider("Discharge Current (A)", 0.1, 10.0, 2.0, key="global_discharge_current")
+        discharge_voltage = st.slider("Discharge Cutoff Voltage (V)", 2.5, 3.5, 2.8, key="global_discharge_voltage")
+        
+        st.write("**Test Parameters:**")
+        pulse_duration = st.slider("Pulse Duration (s)", 1, 60, 10, key="pulse_duration")
+        rest_duration = st.slider("Rest Duration (s)", 1, 300, 30, key="rest_duration")
+        
+        # Store parameters in session state
+        st.session_state.task_params = {
+            'charge_current': charge_current,
+            'charge_voltage': charge_voltage,
+            'discharge_current': discharge_current,
+            'discharge_voltage': discharge_voltage,
+            'pulse_duration': pulse_duration,
+            'rest_duration': rest_duration
+        }
     
     # Simulation controls
     st.subheader("🎮 Simulation")
@@ -453,8 +572,22 @@ if st.session_state.cells_data:
     else:
         st.info("⚪ Recording disabled")
     
-    # Current task display
-    if st.session_state.tasks:
+    # Current task display - show all active tasks
+    if st.session_state.task_assignments:
+        active_tasks = list(set(st.session_state.task_assignments.values()))
+        if len(active_tasks) == 1:
+            st.info(f"⚡ Current Task: **{active_tasks[0]}** (All Cells)")
+        else:
+            tasks_summary = []
+            task_counts = {}
+            for task in st.session_state.task_assignments.values():
+                task_counts[task] = task_counts.get(task, 0) + 1
+            
+            for task, count in task_counts.items():
+                tasks_summary.append(f"**{task}** ({count} cells)")
+            
+            st.info(f"⚡ Active Tasks: {' | '.join(tasks_summary)}")
+    elif st.session_state.tasks:
         st.info(f"⚡ Current Task: **{st.session_state.tasks[0]}**")
     
     # Detailed cell data table
@@ -467,9 +600,13 @@ if st.session_state.cells_data:
                                   cell_data["min_voltage"], 
                                   cell_data["max_voltage"])
         
+        # Get individual task for this cell
+        individual_task = st.session_state.task_assignments.get(cell_id, "IDLE")
+        
         display_data.append({
             'Cell ID': cell_id,
             'Type': cell_data['type'],
+            'Task': individual_task,
             'Status': status,
             'Voltage (V)': cell_data['voltage'],
             'Current (A)': cell_data['current'],
