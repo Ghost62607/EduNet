@@ -338,6 +338,60 @@ with st.sidebar:
         st.session_state.tasks = []
         st.session_state.simulation_running = False
         st.success("Session data cleared!")
+    
+    # Download options
+    st.subheader("⬇️ Download Data")
+    
+    download_col1, download_col2 = st.columns(2)
+    
+    with download_col1:
+        # Download current data
+        if st.session_state.cells_data:
+            current_data_df = pd.DataFrame.from_dict(st.session_state.cells_data, orient='index')
+            current_data_df['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            current_csv = current_data_df.to_csv(index=True)
+            
+            st.download_button(
+                label="📊 Download Current Data",
+                data=current_csv,
+                file_name=f"current_battery_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+    
+    with download_col2:
+        # Download historical data
+        if not st.session_state.historical_data.empty:
+            historical_csv = st.session_state.historical_data.to_csv(index=False)
+            
+            st.download_button(
+                label="📈 Download Historical Data",
+                data=historical_csv,
+                file_name=f"historical_battery_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("No historical data to download")
+    
+    # Download complete dataset (if CSV file exists)
+    if os.path.exists(st.session_state.data_file_path):
+        try:
+            with open(st.session_state.data_file_path, 'r') as file:
+                complete_csv = file.read()
+            
+            file_size = len(complete_csv)
+            file_size_mb = file_size / (1024 * 1024)
+            
+            st.download_button(
+                label=f"💾 Download Complete Dataset ({file_size_mb:.2f} MB)",
+                data=complete_csv,
+                file_name=f"complete_{st.session_state.data_file_path}",
+                mime="text/csv",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
 
 # Main dashboard area
 if st.session_state.cells_data:
