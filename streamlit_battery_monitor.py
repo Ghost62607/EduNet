@@ -1,373 +1,81 @@
 import streamlit as st
-import pandas as pd
 import random
-import json
-from datetime import datetime
-import plotly.express as px
-import plotly.graph_objects as go
+from PIL import Image
 
-# Page configuration
-st.set_page_config(
-    page_title="Battery Cell Monitor",
-    page_icon="🔋",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Demo GIF/meme URLs (replace with your own assets)
+futuristic_gif = "https://media.giphy.com/media/xT0Gqjc8p320vQ4cBa/giphy.gif"
 
-class StreamlitBatteryCellMonitor:
-    def __init__(self):
-        self.valid_cell_types = ["lfp", "li-ion", "nicad", "nimh", "lead-acid"]
-        self.voltage_map = {
-            "lfp": 3.2,
-            "li-ion": 3.6,
-            "nicad": 1.2,
-            "nimh": 1.2,
-            "lead-acid": 2.0
+st.set_page_config(page_title="⚡ Cell Futurizer 3000 ⚡", layout="wide")
+
+def inject_custom_css():
+    st.markdown("""
+        <style>
+        body {
+            background: linear-gradient(120deg, #1a223a 0%, #4e54c8 100%);
+            color: #fff;
         }
-        
-        # Initialize session state
-        if 'cells_data' not in st.session_state:
-            st.session_state.cells_data = {}
-        if 'cell_counter' not in st.session_state:
-            st.session_state.cell_counter = 0
+        .stApp {font-family: 'Segoe UI', sans-serif;}
+        </style>
+    """, unsafe_allow_html=True)
 
-    def add_cell(self, cell_type):
-        """Add a new cell to the system"""
-        if len(st.session_state.cells_data) >= 8:
-            return False, "Maximum 8 cells reached!"
-        
-        st.session_state.cell_counter += 1
-        cell_id = f"cell_{st.session_state.cell_counter}_{cell_type}"
-        
-        voltage = self.voltage_map.get(cell_type, 3.6)
-        
-        st.session_state.cells_data[cell_id] = {
-            "type": cell_type,
-            "voltage": voltage,
-            "current": 0.0,
-            "temp": round(random.uniform(25, 40), 1),
-            "capacity": 0.0,
-            "status": "Ready",
-            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        return True, f"Added new cell: {cell_id}"
+inject_custom_css()
 
-    def remove_cell(self, cell_id):
-        """Remove a cell from the system"""
-        if cell_id in st.session_state.cells_data:
-            del st.session_state.cells_data[cell_id]
-            return True, f"Removed cell: {cell_id}"
-        return False, "Cell not found!"
+# Fancy header
+st.title("⚡ Welcome to the Cell Futurizer 3000! ⚡")
+st.image(futuristic_gif, caption="All systems, go!", use_column_width=True)
 
-    def update_cell_current(self, cell_id, current):
-        """Update current for a specific cell"""
-        if cell_id in st.session_state.cells_data:
-            voltage = st.session_state.cells_data[cell_id]['voltage']
-            st.session_state.cells_data[cell_id]["current"] = current
-            st.session_state.cells_data[cell_id]["capacity"] = round(voltage * current, 2)
-            st.session_state.cells_data[cell_id]["status"] = "Active" if current > 0 else "Standby"
-            return True
-        return False
+with st.expander("🤖 About this App"):
+    st.write("A next-gen app where you invent battery cell realities, now with micro-jokes and futuristic flair.")
 
-    def get_cells_dataframe(self):
-        """Convert cells data to pandas DataFrame"""
-        if not st.session_state.cells_data:
-            return pd.DataFrame()
-        
-        data = []
-        for cell_id, cell_data in st.session_state.cells_data.items():
-            row = {"Cell ID": cell_id}
-            row.update(cell_data)
-            data.append(row)
-        
-        return pd.DataFrame(data)
+number_of_cell = st.slider("🔢 How many cells would you like to calibrate?", 1, 20, 3)
 
-    def export_data(self, format='json'):
-        """Export cell data in various formats"""
-        if format == 'json':
-            return json.dumps(st.session_state.cells_data, indent=2)
-        elif format == 'csv':
-            df = self.get_cells_dataframe()
-            return df.to_csv(index=False)
+list_of_cell = []
+st.markdown("### Describe your cell types (dream big!):")
+cols = st.columns(number_of_cell)
+for i in range(number_of_cell):
+    with cols[i]:
+        cell_type = st.text_input(f"Type for Cell {i+1}", placeholder="e.g. lfp, unicorn, unobtanium...", key=f"cell_{i}")
+        list_of_cell.append(cell_type or f"CellType{i+1}")
 
-def main():
-    monitor = StreamlitBatteryCellMonitor()
-    
-    # Header
-    st.title("🔋 Battery Cell Status Monitor")
-    st.markdown("---")
-    
-    # Sidebar for controls
-    with st.sidebar:
-        st.header("🛠️ Cell Management")
-        
-        # Add new cell section
-        st.subheader("Add New Cell")
-        cell_type = st.selectbox(
-            "Select Cell Type",
-            monitor.valid_cell_types,
-            format_func=str.upper
-        )
-        
-        if st.button("➕ Add Cell", type="primary"):
-            success, message = monitor.add_cell(cell_type)
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
-            st.rerun()
-        
-        # Current cell count
-        cell_count = len(st.session_state.cells_data)
-        st.info(f"Current cells: {cell_count}/8")
-        
-        st.markdown("---")
-        
-        # Bulk operations
-        st.subheader("🔄 Bulk Operations")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗑️ Clear All"):
-                st.session_state.cells_data = {}
-                st.session_state.cell_counter = 0
-                st.rerun()
-        
-        with col2:
-            if st.button("🎲 Random Data"):
-                for cell_id in st.session_state.cells_data.keys():
-                    random_current = round(random.uniform(0, 5), 2)
-                    monitor.update_cell_current(cell_id, random_current)
-                st.rerun()
-    
-    # Main content area
-    if not st.session_state.cells_data:
-        st.info("👆 Add some battery cells using the sidebar to get started!")
-        
-        # Quick start section
-        st.subheader("🚀 Quick Start")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("Add LFP Cell", key="quick_lfp"):
-                monitor.add_cell("lfp")
-                st.rerun()
-        
-        with col2:
-            if st.button("Add Li-ion Cell", key="quick_liion"):
-                monitor.add_cell("li-ion")
-                st.rerun()
-        
-        with col3:
-            if st.button("Add 3 Random Cells", key="quick_random"):
-                for _ in range(3):
-                    cell_type = random.choice(monitor.valid_cell_types)
-                    success, _ = monitor.add_cell(cell_type)
-                    if not success:
-                        break
-                st.rerun()
-    else:
-        # Display current status
-        df = monitor.get_cells_dataframe()
-        
-        # Metrics row
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("Total Cells", len(df))
-        
-        with col2:
-            active_cells = len(df[df['status'] == 'Active'])
-            st.metric("Active Cells", active_cells)
-        
-        with col3:
-            total_capacity = df['capacity'].sum()
-            st.metric("Total Capacity", f"{total_capacity:.2f} Wh")
-        
-        with col4:
-            avg_temp = df['temp'].mean()
-            st.metric("Avg Temperature", f"{avg_temp:.1f}°C")
-        
-        with col5:
-            total_current = df['current'].sum()
-            st.metric("Total Current", f"{total_current:.2f} A")
-        
-        st.markdown("---")
-        
-        # Tabs for different views
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Cell Status", "⚡ Update Currents", "📈 Analytics", "💾 Export"])
-        
-        with tab1:
-            st.subheader("Current Cell Status")
-            
-            # Display table with styling
-            styled_df = df.copy()
-            styled_df = styled_df.drop(['created'], axis=1, errors='ignore')
-            
-            # Color code status
-            def highlight_status(val):
-                if val == 'Active':
-                    return 'background-color: #d4edda; color: #155724'
-                elif val == 'Standby':
-                    return 'background-color: #fff3cd; color: #856404'
-                else:
-                    return 'background-color: #f8f9fa; color: #6c757d'
-            
-            st.dataframe(
-                styled_df.style.applymap(highlight_status, subset=['status']),
-                use_container_width=True
-            )
-            
-            # Individual cell removal
-            st.subheader("🗑️ Remove Individual Cells")
-            if len(df) > 0:
-                cell_to_remove = st.selectbox(
-                    "Select cell to remove",
-                    df['Cell ID'].tolist()
-                )
-                
-                col1, col2 = st.columns([1, 4])
-                with col1:
-                    if st.button("Remove Cell", type="secondary"):
-                        success, message = monitor.remove_cell(cell_to_remove)
-                        if success:
-                            st.success(message)
-                        else:
-                            st.error(message)
-                        st.rerun()
-        
-        with tab2:
-            st.subheader("⚡ Update Cell Currents")
-            
-            # Create form for updating currents
-            with st.form("update_currents"):
-                st.write("Update current values for each cell:")
-                
-                updated_currents = {}
-                for _, row in df.iterrows():
-                    cell_id = row['Cell ID']
-                    current_value = row['current']
-                    
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    with col1:
-                        st.write(f"**{cell_id}** ({row['type'].upper()})")
-                    with col2:
-                        new_current = st.number_input(
-                            f"Current (A)",
-                            value=float(current_value),
-                            min_value=0.0,
-                            max_value=10.0,
-                            step=0.1,
-                            key=f"current_{cell_id}"
-                        )
-                        updated_currents[cell_id] = new_current
-                    with col3:
-                        capacity = row['voltage'] * new_current
-                        st.write(f"→ {capacity:.2f} Wh")
-                
-                submitted = st.form_submit_button("🔄 Update All Currents", type="primary")
-                
-                if submitted:
-                    for cell_id, current in updated_currents.items():
-                        monitor.update_cell_current(cell_id, current)
-                    st.success("✅ All currents updated successfully!")
-                    st.rerun()
-        
-        with tab3:
-            st.subheader("📈 Analytics & Visualizations")
-            
-            if len(df) > 0:
-                # Charts row
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Capacity by cell type
-                    capacity_by_type = df.groupby('type')['capacity'].sum().reset_index()
-                    fig1 = px.pie(
-                        capacity_by_type, 
-                        values='capacity', 
-                        names='type',
-                        title='Capacity Distribution by Cell Type'
-                    )
-                    st.plotly_chart(fig1, use_container_width=True)
-                
-                with col2:
-                    # Current vs Voltage scatter
-                    fig2 = px.scatter(
-                        df,
-                        x='voltage',
-                        y='current',
-                        size='capacity',
-                        color='type',
-                        title='Current vs Voltage (Size = Capacity)',
-                        hover_data=['Cell ID', 'temp', 'status']
-                    )
-                    st.plotly_chart(fig2, use_container_width=True)
-                
-                # Temperature distribution
-                fig3 = px.histogram(
-                    df,
-                    x='temp',
-                    color='type',
-                    title='Temperature Distribution',
-                    nbins=10
-                )
-                st.plotly_chart(fig3, use_container_width=True)
-                
-                # Status summary
-                status_counts = df['status'].value_counts()
-                fig4 = px.bar(
-                    x=status_counts.index,
-                    y=status_counts.values,
-                    title='Cell Status Summary',
-                    color=status_counts.index
-                )
-                st.plotly_chart(fig4, use_container_width=True)
-            else:
-                st.info("No data available for analytics")
-        
-        with tab4:
-            st.subheader("💾 Export Data")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("**Export as JSON**")
-                json_data = monitor.export_data('json')
-                st.download_button(
-                    label="📥 Download JSON",
-                    data=json_data,
-                    file_name=f"battery_cells_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-                
-                with st.expander("Preview JSON"):
-                    st.code(json_data, language='json')
-            
-            with col2:
-                st.write("**Export as CSV**")
-                csv_data = monitor.export_data('csv')
-                st.download_button(
-                    label="📥 Download CSV",
-                    data=csv_data,
-                    file_name=f"battery_cells_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-                
-                with st.expander("Preview CSV"):
-                    st.dataframe(df)
-    
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666;'>
-            🔋 Battery Cell Status Monitor | Built with Streamlit
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+# Humor: celebrate user creativity
+if "unicorn" in [c.lower() for c in list_of_cell]:
+    st.success("🦄 Unicorn cell detected - magical output guaranteed!")
 
-if __name__ == "__main__":
-    main()
+cells_data = {}
+for idx, cell_type in enumerate(list_of_cell, start=1):
+    key = f"cell_{idx}_{cell_type}"
+    voltage = 3.7 if cell_type.lower() == "unicorn" else (3.2 if cell_type.lower() == "lfp" else 3.6)
+    min_voltage, max_voltage = (2.7, 4.5) if cell_type.lower() == "unicorn" else \
+                              (2.8, 3.6) if cell_type.lower() == "lfp" else (3.2, 4.0)
+    temp = round(random.uniform(25, 40), 1)
+    capacity = round(voltage * 0.5, 2)
+    cells_data[key] = {
+        "voltage": voltage, "temp": temp, "capacity": capacity,
+        "min_voltage": min_voltage, "max_voltage": max_voltage,
+    }
+
+st.markdown("## 🔬 Generated Cells Data")
+for key, val in cells_data.items():
+    st.info(f"**{key}:** {val}")
+
+# Interactive Task Section
+st.markdown("---")
+st.subheader("🛰️ Mission Control: Assign Operations")
+task_number = st.slider("Number of missions", 1, 5, 2)
+tasks = []
+for i in range(task_number):
+    t = st.selectbox(f"Mission for Task {i+1}", ["CC_CV", "IDLE", "CC_CD", "DEEP_SLEEP", "PARTY_MODE"], key=f"task_{i}")
+    tasks.append(t)
+st.write(f"Your chosen missions: {tasks}")
+
+# Humor: Easter egg tasks
+if "PARTY_MODE" in tasks:
+    st.balloons()
+    st.warning("🎉 Party mode engaged! Warning: unpredictable levels of fun ahead.")
+
+# Futuristic interaction: animated loading
+with st.spinner('Calibrating quantum fields... Please don’t panic 🚀'):
+    st.progress(random.randint(60, 100))
+
+st.success("All systems nominal. May your cells power the future!")
+
